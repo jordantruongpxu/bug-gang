@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
     Animated,
     Dimensions,
@@ -11,23 +11,11 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
-
-interface Task {
-  id: number;
-  title: string;
-  status: 'To Do' | 'In Progress' | 'Completed';
-}
+import { SQLiteService, Task, TASK_STATUSES, TaskStatus } from '../../services';
 
 type ViewMode = 'list' | 'board';
 
-const COLUMNS: Task['status'][] = ['To Do', 'In Progress', 'Completed'];
-
-const initialTasks: Task[] = [
-  { id: 1, title: "Plan weekly meal prep", status: "To Do" },
-  { id: 2, title: "Debug ant trail AI", status: "In Progress" },
-  { id: 3, title: "Send out team retrospective summary", status: "Completed" },
-  { id: 4, title: "Buy more honey dew drops", status: "To Do" },
-];
+const COLUMNS: TaskStatus[] = TASK_STATUSES;
 
 // Simple icon component
 const SimpleIcon = ({ name, size = 16, color = '#007AFF' }: { name: string; size?: number; color?: string }) => {
@@ -49,43 +37,79 @@ const SimpleIcon = ({ name, size = 16, color = '#007AFF' }: { name: string; size
 };
 
 export default function TasksScreen() {
-  const [tasks, setTasks] = useState<Task[]>(initialTasks);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('board');
   const [draggedTask, setDraggedTask] = useState<Task | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   const screenWidth = Dimensions.get('window').width;
   const isWideScreen = screenWidth > 768;
 
+  // Initialize database and load tasks on component mount
+  useEffect(() => {
+    const setupDatabase = async () => {
+      try {
+        setIsLoading(true);
+        await SQLiteService.initializeDatabase();
+        const loadedTasks = await SQLiteService.getAllTasks();
+        console.log({ loadedTasks})
+        setTasks(loadedTasks);
+      } catch (error) {
+        console.error('Failed to setup database:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    setupDatabase();
+  }, []);
+
   // Add new task
-  const addTask = () => {
+  const addTask = async () => {
     if (newTaskTitle.trim()) {
-      const newTask: Task = {
-        id: Date.now(),
-        title: newTaskTitle.trim(),
-        status: 'To Do',
-      };
-      setTasks([...tasks, newTask]);
-      setNewTaskTitle('');
+      try {
+        const newTask = await SQLiteService.addTask(newTaskTitle.trim());
+        if (newTask) {
+          setTasks(prevTasks => [...prevTasks, newTask]);
+          setNewTaskTitle('');
+        }
+      } catch (error) {
+        console.error('Failed to add task:', error);
+      }
     }
   };
 
   // Move task to completed
-  const moveTaskToCompleted = (taskId: number) => {
-    setTasks(tasks.map((task: Task) =>
-      task.id === taskId
-        ? { ...task, status: 'Completed' as const }
-        : task
-    ));
+  const moveTaskToCompleted = async (taskId: number) => {
+    try {
+      const success = await SQLiteService.updateTaskStatus(taskId, 'Completed');
+      if (success) {
+        setTasks(tasks.map((task: Task) =>
+          task.id === taskId
+            ? { ...task, status: 'Completed' as const }
+            : task
+        ));
+      }
+    } catch (error) {
+      console.error('Failed to complete task:', error);
+    }
   };
 
   // Move task between columns (for board view)
-  const moveTask = (taskId: number, newStatus: Task['status']) => {
-    setTasks(tasks.map((task: Task) =>
-      task.id === taskId
-        ? { ...task, status: newStatus }
-        : task
-    ));
+  const moveTask = async (taskId: number, newStatus: TaskStatus) => {
+    try {
+      const success = await SQLiteService.updateTaskStatus(taskId, newStatus);
+      if (success) {
+        setTasks(tasks.map((task: Task) =>
+          task.id === taskId
+            ? { ...task, status: newStatus }
+            : task
+        ));
+      }
+    } catch (error) {
+      console.error('Failed to move task:', error);
+    }
   };
 
   // Group tasks by status for list view
@@ -265,12 +289,21 @@ export default function TasksScreen() {
     </ScrollView>
   );
 
+  // Show loading state while database initializes
+  if (isLoading) {
+    return (
+      <View style={[styles.container, styles.loadingContainer]}>
+        <Text style={styles.loadingText}>🐛 Loading Bug Gang Scheduler...</Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>
-          🐛 Scheduler
+          🐛 BG Scheduler
         </Text>
         
         {/* Add Task Input */}
@@ -354,6 +387,15 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F5F5F5',
+  },
+  loadingContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: 18,
+    color: '#007AFF',
+    fontWeight: '600',
   },
   icon: {
     textAlign: 'center',
